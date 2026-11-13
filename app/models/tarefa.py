@@ -1,8 +1,13 @@
-"""Entidade Tarefa: dados e regras de uma tarefa."""
+"""Entidade Tarefa: dados e regras de uma tarefa.
+ 
+A RN-03 (controle da data de conclusão) mora nos métodos `concluir` e
+`reabrir`, que são o único caminho para mudar o status da tarefa.
+"""
  
 from __future__ import annotations
 from datetime import date, datetime
 from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship, validates
 from app.core.datas import agora_utc
 from app.core.exceptions import TituloObrigatorio, ValorInvalido
@@ -20,6 +25,7 @@ class Tarefa(Base):
         Integer, ForeignKey("usuarios.id"), nullable=False, index=True
     )
     titulo = Column(String(200), nullable=False)
+    # Colunas privadas: só `concluir` e `reabrir` podem alterá-las.
     _status = Column("status", String(20), nullable=False)
     prioridade = Column(String(20), nullable=False)
     prazo = Column(Date, nullable=True)
@@ -42,12 +48,7 @@ class Tarefa(Base):
         prioridade: PrioridadeTarefa | str = PrioridadeTarefa.MEDIA,
         prazo: date | None = None,
     ) -> None:
-        """Cria uma tarefa sempre pendente e sem data de conclusão (RN-02).
- 
-        Não existe forma de criar uma tarefa já concluída: o status inicial não
-        é parâmetro. Esta é a RN-02 garantida por construção, e não por
-        disciplina de quem chama.
-        """
+        """Cria uma tarefa sempre pendente e sem data de conclusão (RN-02)."""
         self.usuario_id = usuario_id
         self.titulo = titulo
         self.prioridade = prioridade
@@ -59,25 +60,55 @@ class Tarefa(Base):
     # leitura
     # -------------------------------------------------------------------------
  
-    @property
+    @hybrid_property
     def status(self) -> StatusTarefa:
         """Status atual, como membro do enum. Somente leitura.
  
-        Não há setter: `tarefa.status = "concluida"` levanta `AttributeError`.
+        Para mudar o status, existem os métodos `concluir` e `reabrir`.
         """
         return StatusTarefa(self._status)
  
+    @status.expression
+    def status(cls):  # noqa: N805 - assinatura exigida pelo SQLAlchemy
+        """Versão da propriedade usada dentro de consultas SQL."""
+        return cls._status
+ 
     @property
     def concluido_em(self) -> datetime | None:
-        """Momento da conclusão, ou `None` se a tarefa está pendente.
- 
-        Somente leitura: quem define este valor é a própria tarefa.
-        """
+        """Momento da conclusão ao ser concluída, ou `None` se estiver pendente."""
         return self._concluido_em
  
     # -------------------------------------------------------------------------
     # operações
     # -------------------------------------------------------------------------
+ 
+    def concluir(self, agora: datetime | None = None) -> None:
+        """Conclui a tarefa e registra o momento (RN-03).
+ 
+        Se a tarefa já estiver concluída, não faz nada para evitar que
+        uma edição futura sobrescreva ou falsifique a data original.
+        """
+        if self.status is StatusTarefa.CONCLUIDA:
+            return
+        self._status = StatusTarefa.CONCLUIDA.value
+        self._concluido_em = agora or agora_utc()
+ 
+    def reabrir(self) -> None:
+        """Devolve a tarefa para pendente e apaga a data de conclusão (RN-03)."""
+        if self.status is StatusTarefa.PENDENTE:
+            return
+        self._status = StatusTarefa.PENDENTE.value
+        self._concluido_em = None
+ 
+    def definir_status(
+        self, novo_status: StatusTarefa | str, agora: datetime | None = None
+    ) -> None:
+        """Aplica o status informado pela operação correspondente."""
+        status = StatusTarefa(novo_status)
+        if status is StatusTarefa.CONCLUIDA:
+            self.concluir(agora)
+        else:
+            self.reabrir()
  
     def pertence_a(self, usuario_id: int) -> bool:
         """Informa se a tarefa é de um determinado usuário."""
@@ -108,6 +139,6 @@ class Tarefa(Base):
     def __repr__(self) -> str:
         return (
             f"<Tarefa id={self.id} titulo={self.titulo!r} "
-            f"status={self.status!r}>"
+            f"status={self._status!r}>"
         )
  
