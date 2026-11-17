@@ -1,10 +1,7 @@
 """Endpoints de tarefas: todos exigem login.
  
-O dono das tarefas é SEMPRE quem está autenticado (vem do token). Não existe
-mais `usuarioId` na URL nem no corpo: antes, bastava trocar esse número para
-ler, alterar ou apagar a tarefa de outra pessoa.
-Os nomes públicos dos parâmetros continuam em camelCase (`prazoAte`), e do
-lado do Python são `snake_case` - o `alias` faz a ponte.
+Os nomes públicos dos parâmetros continuam em camelCase (`prazoAte`,
+`ordenarPor`), e do lado do Python são `snake_case` - o `alias` faz a ponte.
 """
  
 from datetime import date
@@ -13,7 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
  
 from app.api.dependencies import UsuarioAtual, obter_tarefa_servico
-from app.models.enums import PrioridadeTarefa, StatusTarefa
+from app.models.enums import CampoOrdenacao, Ordem, PrioridadeTarefa, StatusTarefa
 from app.repositories import FiltroDeTarefas
 from app.schemas import TarefaCreate, TarefaOut, TarefaUpdate
 from app.services import AlteracoesDaTarefa, TarefaServico
@@ -33,12 +30,7 @@ _RESPOSTAS_DE_UMA_TAREFA = {
  
  
 def _montar_alteracoes(dados: TarefaUpdate) -> AlteracoesDaTarefa:
-    """Converte o corpo do PATCH em alterações de domínio.
- 
-    `exclude_unset=True` devolve apenas os campos que o cliente realmente
-    enviou. Os ausentes ficam com a sentinela `NAO_INFORMADO`, o que permite
-    distinguir "não mencionei o prazo" de "quero apagar o prazo".
-    """
+    """Converte o corpo do PATCH em alterações de domínio."""
     return AlteracoesDaTarefa(**dados.model_dump(exclude_unset=True))
  
  
@@ -84,11 +76,18 @@ def listar_tasks(
             description="Texto contido no título (sem diferenciar maiúsculas)",
         ),
     ] = None,
+    ordenar_por: Annotated[
+        CampoOrdenacao, Query(alias="ordenarPor")
+    ] = CampoOrdenacao.CRIADO_EM,
+    ordem: Annotated[Ordem, Query()] = Ordem.DESC,
+    limite: Annotated[int, Query(ge=1, le=1000, alias="limit")] = 100,
+    deslocamento: Annotated[int, Query(ge=0, alias="offset")] = 0,
 ) -> list[TarefaOut]:
-    """Lista as tarefas do usuário logado, com filtros opcionais.
+    """Lista as tarefas do usuário logado, com filtros e ordenação opcionais.
  
-    Os filtros informados se combinam (AND). Nenhum resultado encontrado
-    devolve lista vazia `[]` com 200 OK, e não 404.
+    O cabeçalho `X-Total-Count` retorna o total real de tarefas que atendem
+    aos filtros (ignorando `limit` e `offset`). Na ordenação por prazo, as
+    tarefas sem prazo vêm sempre por último.
     """
     filtro = FiltroDeTarefas(
         usuario_id=usuario.id,
@@ -96,10 +95,14 @@ def listar_tasks(
         prioridade=prioridade,
         prazo_ate=prazo_ate,
         busca=(busca or "").strip() or None,
+        ordenar_por=ordenar_por,
+        ordem=ordem,
+        limite=limite,
+        deslocamento=deslocamento,
     )
-    tarefas = servico.listar(filtro)
-    response.headers["X-Total-Count"] = str(len(tarefas))
-    return tarefas
+    pagina = servico.listar(filtro)
+    response.headers["X-Total-Count"] = str(pagina.total)
+    return pagina.tarefas
  
  
 @router.get(
@@ -129,11 +132,7 @@ def atualizar_task(
     usuario: UsuarioAtual,
     servico: Servico,
 ) -> TarefaOut:
-    """Atualiza parcialmente uma tarefa.
- 
-    Quando o status muda, a data de conclusão é ajustada pela própria tarefa,
-    conforme a RN-03.
-    """
+    """Atualiza parcialmente uma tarefa."""
     return servico.atualizar(tarefa_id, usuario.id, _montar_alteracoes(dados))
  
  

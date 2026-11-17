@@ -1,14 +1,4 @@
-"""Enumerações do domínio.
- 
-Antes, os valores válidos de status e prioridade estavam escritos como texto
-solto em três lugares: no `Literal` dos schemas, no `default` das colunas e no
-`case` que ordenava por prioridade. Acrescentar uma prioridade nova exigia
-lembrar dos três. Aqui eles passam a ter um único lugar de definição.
- 
-Herdar de `str` faz cada membro se comportar como o próprio texto - o que
-permite gravá-lo em uma coluna `String`, compará-lo com uma string vinda do
-banco e serializá-lo em JSON sem conversão manual.
-"""
+"""Enumerações do domínio."""
  
 from enum import Enum
  
@@ -30,11 +20,7 @@ class PrioridadeTarefa(str, Enum):
  
     @property
     def peso(self) -> int:
-        """Posição na ordenação por prioridade - 0 é a mais urgente.
- 
-        Ordenar pelo texto daria "alta, baixa, media, urgente", que não é a
-        ordem que o usuário espera ver. O peso existe para isso.
-        """
+        """Posição na ordenação por prioridade - 0 é a mais urgente."""
         return _PESOS[self]
  
     @classmethod
@@ -49,4 +35,26 @@ _PESOS = {
     PrioridadeTarefa.MEDIA: 2,
     PrioridadeTarefa.BAIXA: 3,
 }
+ 
+ 
+class CampoOrdenacao(str, Enum):
+    """Campos pelos quais a listagem de tarefas pode ser ordenada.
+ 
+    Os valores repetem o nome público do campo na API (camelCase), porque é
+    isso que o cliente envia em `?ordenarPor=`. Como é um enum, um valor fora
+    da lista passa a ser recusado com 422 - antes, o código caía
+    silenciosamente na ordenação por data de criação e o cliente nunca sabia
+    que seu parâmetro havia sido ignorado.
+    """
+ 
+    CRIADO_EM = "criadoEm"
+    PRAZO = "prazo"
+    PRIORIDADE = "prioridade"
+ 
+ 
+class Ordem(str, Enum):
+    """Sentido da ordenação."""
+ 
+    ASC = "asc"
+    DESC = "desc"
  

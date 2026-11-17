@@ -8,8 +8,11 @@ from typing import Any
 from app.core.exceptions import AcessoNaoAutorizado, TarefaNaoEncontrada
 from app.models import Tarefa
 from app.models.enums import PrioridadeTarefa, StatusTarefa
-from app.repositories import FiltroDeTarefas, TarefaRepositorio
+from app.repositories import FiltroDeTarefas, PaginaDeTarefas, TarefaRepositorio
  
+# Sentinela para distinguir "campo não enviado" de "campo enviado como null".
+# Sem ela, não haveria como diferenciar um PATCH que não menciona o prazo de
+# um PATCH que pede explicitamente para apagá-lo.
 NAO_INFORMADO: Any = object()
  
  
@@ -63,7 +66,7 @@ class TarefaServico:
         )
         return self._tarefas.salvar(tarefa)
  
-    def listar(self, filtro: FiltroDeTarefas) -> list[Tarefa]:
+    def listar(self, filtro: FiltroDeTarefas) -> PaginaDeTarefas:
         """Lista as tarefas conforme os critérios informados."""
         return self._tarefas.listar(filtro)
  

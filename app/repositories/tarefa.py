@@ -1,43 +1,60 @@
-"""Acesso aos dados de tarefa: filtros e busca."""
+"""Acesso aos dados de tarefa: filtros, ordenação e paginação."""
  
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
+from sqlalchemy import case
 from app.models import Tarefa
-from app.models.enums import PrioridadeTarefa, StatusTarefa
+from app.models.enums import CampoOrdenacao, Ordem, PrioridadeTarefa, StatusTarefa
 from app.repositories.base import RepositorioBase
  
  
 @dataclass(frozen=True)
 class FiltroDeTarefas:
-    """Critérios de uma consulta de tarefas.
- 
-    Existe para que a assinatura de `TarefaRepositorio.listar` não cresça até
-    oito parâmetros posicionais, e para que acrescentar um filtro novo não
-    mude a assinatura de quem já a chama.
-    """
+    """Critérios de uma consulta de tarefas."""
  
     usuario_id: int
     status: StatusTarefa | None = None
     prioridade: PrioridadeTarefa | None = None
     prazo_ate: date | None = None
     busca: str | None = None
+    ordenar_por: CampoOrdenacao = CampoOrdenacao.CRIADO_EM
+    ordem: Ordem = Ordem.DESC
+    limite: int = 100
+    deslocamento: int = 0
+ 
+ 
+@dataclass(frozen=True)
+class PaginaDeTarefas:
+    """Uma página da listagem e o total de tarefas que atendem ao filtro."""
+ 
+    tarefas: list[Tarefa]
+    total: int
  
  
 class TarefaRepositorio(RepositorioBase[Tarefa]):
     """Acesso aos dados de tarefa."""
  
+    # Ordena pela relevância dos pesos (0=urgente ... 3=baixa), e não alfabética.
+    _ORDEM_POR_PRIORIDADE = case(
+        PrioridadeTarefa.mapa_de_pesos(), value=Tarefa.prioridade, else_=99
+    )
+ 
     @property
     def modelo(self) -> type[Tarefa]:
         return Tarefa
  
-    def listar(self, filtro: FiltroDeTarefas) -> list[Tarefa]:
-        """Lista as tarefas de um usuário conforme os critérios informados.
+    def _coluna_de_ordenacao(self, campo: CampoOrdenacao):
+        """Devolve a expressão SQL correspondente ao campo de ordenação."""
+        colunas = {
+            CampoOrdenacao.CRIADO_EM: Tarefa.criado_em,
+            CampoOrdenacao.PRAZO: Tarefa.prazo,
+            CampoOrdenacao.PRIORIDADE: self._ORDEM_POR_PRIORIDADE,
+        }
+        return colunas[campo]
  
-        Os filtros são encadeados: cada critério preenchido acrescenta uma
-        condição ao WHERE. Nenhum critério além do usuário devolve todas as
-        tarefas dele, das mais recentes para as mais antigas.
-        """
+    def listar(self, filtro: FiltroDeTarefas) -> PaginaDeTarefas:
+        """Lista as tarefas de um usuário conforme os critérios informados."""
         consulta = self._sessao.query(Tarefa).filter(
             Tarefa.usuario_id == filtro.usuario_id
         )
@@ -52,10 +69,32 @@ class TarefaRepositorio(RepositorioBase[Tarefa]):
                 Tarefa.prazo.isnot(None), Tarefa.prazo <= filtro.prazo_ate
             )
         if filtro.busca:
-            # icontains com autoescape=True busca sem diferenciar maiúsculas e
-            # escapa caracteres especiais como '%' e '_' para não virarem curingas.
+            # icontains = "contém, sem diferenciar maiúsculas" (ILIKE no
+            # PostgreSQL). `autoescape` faz `%` e `_` digitados pelo usuário
+            # serem procurados como texto, e não como curingas do LIKE.
             consulta = consulta.filter(
                 Tarefa.titulo.icontains(filtro.busca, autoescape=True)
             )
-        return consulta.order_by(Tarefa.criado_em.desc(), Tarefa.id.desc()).all()
+ 
+        # O total é contado ANTES de aplicar limite e deslocamento.
+        total = consulta.order_by(None).count()
+ 
+        coluna = self._coluna_de_ordenacao(filtro.ordenar_por)
+        ordenacao = [coluna.desc() if filtro.ordem is Ordem.DESC else coluna.asc()]
+        if filtro.ordenar_por is CampoOrdenacao.PRAZO:
+            # Tarefa sem prazo vai sempre para o FIM, em qualquer sentido. Cada
+            # banco põe o NULL num lugar diferente; este critério vem antes e
+            # resolve igual em todos: 0 = tem prazo, 1 = sem prazo.
+            ordenacao.insert(0, case((Tarefa.prazo.is_(None), 1), else_=0))
+        # Desempate pelo id: sem ele, tarefas com o mesmo valor (ex.: mesma
+        # prioridade) poderiam trocar de lugar entre uma página e outra.
+        ordenacao.append(Tarefa.id.desc())
+ 
+        tarefas = (
+            consulta.order_by(*ordenacao)
+            .offset(filtro.deslocamento)
+            .limit(filtro.limite)
+            .all()
+        )
+        return PaginaDeTarefas(tarefas=tarefas, total=total)
  

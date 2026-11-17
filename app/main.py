@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api.routers import tasks, usuarios
 from app.core.config import obter_configuracao
@@ -38,9 +39,25 @@ async def ciclo_de_vida(_app: FastAPI) -> AsyncIterator[None]:
  
 app = FastAPI(
     title="Todo List API",
-    description="Backend do Todo List - curso Desenvolvedor Full Stack (SENAC).",
-    version="0.10.0",
+    description=(
+        "Backend do Todo List - curso Desenvolvedor Full Stack (SENAC). "
+        "Para usar as rotas protegidas: faça login em `POST /usuarios/login`, "
+        "copie o `accessToken` e cole no botão **Authorize**."
+    ),
+    version="0.11.0",
     lifespan=ciclo_de_vida,
+)
+ 
+# Sem o middleware de CORS, o navegador bloqueia chamadas do front-end
+# (que roda em outra porta/origem). `expose_headers` libera o JS a ler
+# o cabeçalho customizado `X-Total-Count` na paginação.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(obter_configuracao().origens_permitidas),
+    allow_credentials=False,  # o token vai no cabeçalho, não em cookie
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
  
  
@@ -52,6 +69,7 @@ async def tratar_erro_de_dominio(
     codigo = next(
         (codigo for tipo, codigo in STATUS_POR_ERRO if isinstance(excecao, tipo)), 400
     )
+    # O padrão HTTP pede que toda resposta 401 diga COMO se autenticar.
     cabecalhos = {"WWW-Authenticate": "Bearer"} if codigo == 401 else None
     return JSONResponse(
         status_code=codigo, content={"detail": excecao.mensagem}, headers=cabecalhos
@@ -78,6 +96,7 @@ def _mensagem_de_validacao(erro: dict[str, Any]) -> tuple[str, str]:
     if tipo == "value_error":
         if campo == "email":
             return campo, "E-mail inválido."
+        # Mensagens dos nossos próprios validadores já estão em português.
         return campo, str(erro.get("msg", "")).removeprefix("Value error, ")
     return campo, mensagens.get(tipo, f"Valor inválido em '{campo}'.")
  
